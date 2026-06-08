@@ -28,13 +28,25 @@ const CATEGORY_ACTIVE: Record<Category, string> = {
 };
 
 export default function Home() {
-  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todos, setTodos] = useState<Todo[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const saved = localStorage.getItem("todos");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [input, setInput] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<Category>("未定");
   const [activeTab, setActiveTab] = useState<Category | "すべて">("すべて");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
   const editRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem("todos", JSON.stringify(todos));
+  }, [todos]);
 
   useEffect(() => {
     if (editingId !== null) editRef.current?.focus();
