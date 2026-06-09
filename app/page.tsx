@@ -64,6 +64,8 @@ export default function Home() {
   const [selectedCategory, setSelectedCategory] = useState<Category>("未定");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dragOverCategory, setDragOverCategory] = useState<Category | null>(null);
   const [editingBoardId, setEditingBoardId] = useState<string | null>(null);
   const [editingBoardName, setEditingBoardName] = useState("");
   const [showNewBoard, setShowNewBoard] = useState(false);
@@ -123,6 +125,12 @@ export default function Home() {
       setTodos((prev) => prev.map((t) => (t.id === editingId ? { ...t, text: trimmed } : t)));
     }
     setEditingId(null);
+  };
+
+  const moveToCategory = (id: number, category: Category) => {
+    setTodos((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, category } : t))
+    );
   };
 
   const moveUp = (id: number, category: Category) => {
@@ -303,17 +311,40 @@ export default function Home() {
             const colTodos = todos.filter((t) => t.category === cat);
             const style = COLUMN_STYLE[cat];
             return (
-              <div key={cat} className={`rounded-2xl border ${style.border} overflow-hidden flex flex-col`}>
+              <div
+                key={cat}
+                className={`rounded-2xl border ${style.border} overflow-hidden flex flex-col transition-all ${
+                  dragOverCategory === cat ? "ring-2 ring-indigo-400 ring-offset-1" : ""
+                }`}
+                onDragOver={(e) => { e.preventDefault(); setDragOverCategory(cat); }}
+                onDragLeave={() => setDragOverCategory(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggingId !== null) moveToCategory(draggingId, cat);
+                  setDraggingId(null);
+                  setDragOverCategory(null);
+                }}
+              >
                 <div className={`${style.header} px-4 py-3 flex items-center justify-between`}>
                   <span className="font-semibold text-sm">{cat}</span>
                   <span className="text-xs opacity-80 bg-white/20 rounded-full px-2 py-0.5">{colTodos.length}</span>
                 </div>
                 <div className={`${style.bg} flex-1 p-2 min-h-40 space-y-2`}>
                   {colTodos.length === 0 && (
-                    <p className="text-center text-xs text-slate-300 pt-6">なし</p>
+                    <p className="text-center text-xs text-slate-300 pt-6">
+                      {dragOverCategory === cat ? "ここにドロップ" : "なし"}
+                    </p>
                   )}
                   {colTodos.map((todo, idx) => (
-                    <div key={todo.id} className="bg-white rounded-xl shadow-sm p-3 group">
+                    <div
+                      key={todo.id}
+                      draggable
+                      onDragStart={() => setDraggingId(todo.id)}
+                      onDragEnd={() => { setDraggingId(null); setDragOverCategory(null); }}
+                      className={`bg-white rounded-xl shadow-sm p-3 group cursor-grab active:cursor-grabbing transition-opacity ${
+                        draggingId === todo.id ? "opacity-40" : ""
+                      }`}
+                    >
                       <div className="flex items-start gap-2">
                         <button
                           onClick={() => toggleTodo(todo.id)}
