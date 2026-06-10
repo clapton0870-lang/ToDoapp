@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 type Category = "短期" | "中期" | "長期" | "未定";
 
@@ -33,33 +34,29 @@ const CATEGORY_BADGE: Record<Category, string> = {
   未定: "bg-slate-100 text-slate-500 border-slate-200",
 };
 
-const DEFAULT_BOARDS: Board[] = [
-  { id: "work", name: "仕事", todos: [] },
-  { id: "private", name: "プライベート", todos: [] },
-];
-
-function loadBoards(): Board[] {
-  if (typeof window === "undefined") return DEFAULT_BOARDS;
+// 初回ログイン時に localStorage の旧データをクラウドへ移行するための読み込み
+function loadLocalBoards(): { name: string; todos: Todo[] }[] {
   try {
     const saved = localStorage.getItem("boards");
-    if (saved) return JSON.parse(saved);
-    // 旧データ移行
-    const oldTodos = localStorage.getItem("todos");
-    if (oldTodos) {
-      const todos = JSON.parse(oldTodos);
-      const boards = [...DEFAULT_BOARDS];
-      boards[0] = { ...boards[0], todos };
-      return boards;
+    if (saved) {
+      const boards = JSON.parse(saved);
+      if (Array.isArray(boards) && boards.length > 0) {
+        return boards.map((b) => ({ name: b.name, todos: b.todos ?? [] }));
+      }
     }
-    return DEFAULT_BOARDS;
-  } catch {
-    return DEFAULT_BOARDS;
-  }
+  } catch {}
+  return [
+    { name: "仕事", todos: [] },
+    { name: "プライベート", todos: [] },
+  ];
 }
 
 export default function Home() {
-  const [boards, setBoards] = useState<Board[]>(loadBoards);
-  const [activeBoardId, setActiveBoardId] = useState<string>(DEFAULT_BOARDS[0].id);
+  const supabase = useRef(createClient()).current;
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [activeBoardId, setActiveBoardId] = useState<string>("");
   const [input, setInput] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<Category>("未定");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -72,10 +69,60 @@ export default function Home() {
   const [newBoardName, setNewBoardName] = useState("");
   const editRef = useRef<HTMLTextAreaElement>(null);
   const boardEditRef = useRef<HTMLInputElement>(null);
+  const prevIdsRef = useRef<string[]>([]);
 
+  // 初回ロード: Supabase から取得。空なら localStorage のデータを移行
   useEffect(() => {
-    localStorage.setItem("boards", JSON.stringify(boards));
-  }, [boards]);
+    (async () => {
+      const { data, error } = await supabase
+        .from("boards")
+        .select("id, name, todos")
+        .order("position");
+      if (error) {
+        console.error("読み込みエラー:", error.message);
+        setLoaded(true);
+        return;
+      }
+      if (data.length === 0) {
+        const locals = loadLocalBoards();
+        const newBoards: Board[] = locals.map((b) => ({
+          id: crypto.randomUUID(),
+          name: b.name,
+          todos: b.todos,
+        }));
+        await supabase.from("boards").insert(
+          newBoards.map((b, i) => ({ id: b.id, name: b.name, todos: b.todos, position: i }))
+        );
+        setBoards(newBoards);
+        setActiveBoardId(newBoards[0].id);
+        prevIdsRef.current = newBoards.map((b) => b.id);
+      } else {
+        setBoards(data as Board[]);
+        setActiveBoardId(data[0].id);
+        prevIdsRef.current = data.map((b) => b.id);
+      }
+      setLoaded(true);
+    })();
+  }, [supabase]);
+
+  // 変更を自動保存（800ms デバウンス）
+  useEffect(() => {
+    if (!loaded || boards.length === 0) return;
+    const timer = setTimeout(async () => {
+      setSaving(true);
+      const { error } = await supabase.from("boards").upsert(
+        boards.map((b, i) => ({ id: b.id, name: b.name, todos: b.todos, position: i }))
+      );
+      if (error) console.error("保存エラー:", error.message);
+      const removed = prevIdsRef.current.filter((id) => !boards.some((b) => b.id === id));
+      if (removed.length > 0) {
+        await supabase.from("boards").delete().in("id", removed);
+      }
+      prevIdsRef.current = boards.map((b) => b.id);
+      setSaving(false);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [boards, loaded, supabase]);
 
   useEffect(() => {
     if (editingId !== null) editRef.current?.focus();
@@ -84,6 +131,11 @@ export default function Home() {
   useEffect(() => {
     if (editingBoardId !== null) boardEditRef.current?.focus();
   }, [editingBoardId]);
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  };
 
   const activeBoard = boards.find((b) => b.id === activeBoardId) ?? boards[0];
   const todos = activeBoard?.todos ?? [];
@@ -164,7 +216,7 @@ export default function Home() {
   const addBoard = () => {
     const name = newBoardName.trim();
     if (!name) return;
-    const id = Date.now().toString();
+    const id = crypto.randomUUID();
     setBoards((prev) => [...prev, { id, name, todos: [] }]);
     setActiveBoardId(id);
     setNewBoardName("");
@@ -187,13 +239,30 @@ export default function Home() {
 
   const remaining = todos.filter((t) => !t.done).length;
 
+  if (!loaded) {
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50 flex items-center justify-center">
+        <p className="text-slate-400 text-sm">読み込み中...</p>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50 flex flex-col items-center pt-8 px-4 pb-10">
       <div className="w-full max-w-6xl">
 
         {/* Header */}
-        <div className="mb-4">
+        <div className="mb-4 flex items-center justify-between">
           <h1 className="text-3xl font-bold text-slate-800 tracking-tight">ToDoリスト</h1>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-300">{saving ? "保存中..." : "✓ 同期済み"}</span>
+            <button
+              onClick={logout}
+              className="text-xs text-slate-400 hover:text-red-400 transition-colors cursor-pointer border border-slate-200 rounded-lg px-3 py-1.5 bg-white"
+            >
+              ログアウト
+            </button>
+          </div>
         </div>
 
         {/* Board Tabs */}
@@ -278,7 +347,7 @@ export default function Home() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey) addTodo(); }}
-            placeholder={`「${activeBoard.name}」にタスクを入力...`}
+            placeholder={`「${activeBoard?.name ?? ""}」にタスクを入力...`}
             rows={2}
             className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 placeholder-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 transition resize-none mb-3"
           />
