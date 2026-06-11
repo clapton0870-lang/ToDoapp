@@ -13,6 +13,21 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search);
     const err = params.get("error");
     if (err) setError(`ログインに失敗しました: ${err}`);
+
+    // メールのリンクから戻ってきたとき、URL中のトークンを取り込んでログイン完了させる
+    const supabase = createClient();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) window.location.href = "/";
+    });
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) window.location.href = "/";
+    });
+    if (window.location.hash.includes("error=")) {
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      const desc = hashParams.get("error_description");
+      if (desc) setError(`ログインに失敗しました: ${desc}`);
+    }
+    return () => subscription.unsubscribe();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -24,7 +39,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/login`,
       },
     });
 
